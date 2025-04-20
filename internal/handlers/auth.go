@@ -99,6 +99,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	})
 }
 
+// TODO: return the refresh token
 func (h *AuthHandler) Login(c *gin.Context) {
 	var login models.UserLoginRequest
 
@@ -154,3 +155,38 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		"token_type": "Bearer",
 	})
 }
+
+func (h *AuthHandler) RefreshToken(c *gin.Context) {
+	//check context value. comes from the middleware
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	//TODO: code duplication. move to a func
+	//new token
+	now := time.Now()
+	claims := jwt.MapClaims{
+		"user_id": userID,
+		"iat":     now.Unix(),
+		"exp":     now.Add(h.tokenExpiration).Unix(),
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString(h.jwtSecret)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Token refresh failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"token":      tokenString,
+		"expires_in": h.tokenExpiration.Seconds(),
+		"token_type": "Bearer",
+	})
+}
+
+//TODO: logout logic
+//Blacklisting in server side
+//add ID (JTI) to the token claims
