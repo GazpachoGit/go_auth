@@ -190,3 +190,4 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 //TODO: logout logic
 //Blacklisting in server side
 //add ID (JTI) to the token claims
+//redis for storage?
