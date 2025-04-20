@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"database/sql"
+	"errors"
 	"go_auth/internal/database"
 	"go_auth/internal/models"
 	"go_auth/internal/utils"
@@ -8,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 type AuthHandler struct {
@@ -25,8 +28,9 @@ func NewAuthHandler(db *database.Database, jwtSecret []byte, tokenExpiration tim
 }
 
 func (h *AuthHandler) Register(c *gin.Context) {
-	var user models.UserRegister
+	var user models.UserRegisterRequest
 
+	//any source (query param, body) (if only body - use ShouldBindBodyJSON)
 	if err := c.ShouldBindJSON(&user); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "Invalid input format",
@@ -92,5 +96,61 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{
 		"message": "User registered successfully",
 		"user_id": id,
+	})
+}
+
+func (h *AuthHandler) Login(c *gin.Context) {
+	var login models.UserLoginRequest
+
+	if err := c.ShouldBindJSON(&login); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid login data"})
+		return
+	}
+
+	var user models.User
+
+	err := h.db.DB.QueryRow(`SELECT id, email, password_hash FROM users
+	WHERE email = $1`,
+		login.Email,
+	).Scan(&user.ID, &user.Email, &user.PasswordHash)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
+		return
+	}
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Login process failed"})
+		return
+	}
+
+	if !utils.CheckPasswordHash(login.Password, user.PasswordHash) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
+		return
+	}
+
+	now := time.Now()
+	claims := jwt.MapClaims{
+		"user_id": user.ID,
+		"email":   user.Email,
+		"iat":     now.Unix(),
+		"exp":     now.Add(h.tokenExpiration).Unix(),
+	}
+
+	//add sign method
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	//sign with private key
+	tokenString, err := token.SignedString(h.jwtSecret)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Token generation failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"token":      tokenString,
+		"expires_in": h.tokenExpiration.Seconds(),
+		//access token type
+		"token_type": "Bearer",
 	})
 }
