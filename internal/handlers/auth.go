@@ -187,6 +187,16 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 	})
 }
 
+func (h *AuthHandler) GetUserProfile(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	email, _ := c.Get("email")
+
+	c.JSON(200, gin.H{
+		"user_id": userID,
+		"email":   email,
+	})
+}
+
 //TODO: logout logic
 //Blacklisting in server side
 //add ID (JTI) to the token claims
