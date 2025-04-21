@@ -1,41 +1,28 @@
 package handlers
 
 import (
-	"context"
-	"database/sql"
 	"errors"
-	"go_auth/internal/database"
 	"go_auth/internal/models"
+	"go_auth/internal/ports"
 	"go_auth/internal/utils"
-	"log"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
-	"github.com/google/uuid"
 )
 
 type AuthHandler struct {
-	db              *database.Database
-	cacheDB         *database.CacheDB
-	jwtSecret       []byte
-	tokenExpiration time.Duration
+	service ports.UserServicePort
 }
 
-func NewAuthHandler(db *database.Database, cache *database.CacheDB, jwtSecret []byte, tokenExpiration time.Duration) *AuthHandler {
+func NewAuthHandler(service ports.UserServicePort) *AuthHandler {
 	return &AuthHandler{
-		db:              db,
-		cacheDB:         cache,
-		jwtSecret:       jwtSecret,
-		tokenExpiration: tokenExpiration,
+		service: service,
 	}
 }
 
 func (h *AuthHandler) Register(c *gin.Context) {
 	var user models.UserRegisterRequest
-
 	//any source (query param, body) (if only body - use ShouldBindBodyJSON)
 	if err := c.ShouldBindJSON(&user); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -45,57 +32,17 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	if err := user.Validate(); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	if err := utils.ValidatePassword(user.Password); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	//TODO: hexagon arch. move this to datasource level
-	var exists bool
-	err := h.db.DB.QueryRow(context.Background(), "SELECT EXISTS(SELECT 1 FROM USERS WHERE email = $1)", user.Email).Scan(&exists)
-
+	id, err := h.service.RegisterUser(user)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
-	}
-
-	if exists {
-		c.JSON(http.StatusConflict, gin.H{"error": "Email already registered"})
-		return
-	}
-
-	hashedPassword, err := utils.HashPassword(user.Password)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Password processing failed"})
-		return
-	}
-
-	tx, err := h.db.DB.Begin(context.Background())
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Transaction start failed"})
-		return
-	}
-
-	var id int
-	err = tx.QueryRow(context.Background(), `
-	INSERT INTO users (email, password_hash) VALUES ($1, $2)
-	RETURNING id`,
-		user.Email,
-		hashedPassword,
-	).Scan(&id)
-
-	if err != nil {
-		tx.Rollback(context.Background())
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "User creation failed"})
-		return
-	}
-
-	if err = tx.Commit(context.Background()); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Transaction commit failed"})
+		if errors.Is(err, utils.ERROR_EMAIL_REGISTERED) {
+			c.AbortWithStatusJSON(http.StatusConflict, gin.H{
+				"errors": err.Error(),
+			})
+			return
+		}
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+			"errors": err.Error(),
+		})
 		return
 	}
 
@@ -114,79 +61,36 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	var user models.User
-
-	err := h.db.DB.QueryRow(context.Background(), `SELECT id, email, password_hash FROM users
-	WHERE email = $1`,
-		login.Email,
-	).Scan(&user.ID, &user.Email, &user.PasswordHash)
-
-	if errors.Is(err, sql.ErrNoRows) {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
-		return
-	}
-
+	tokenString, err := h.service.LoginUser(login)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Login process failed"})
-		return
-	}
-
-	if !utils.CheckPasswordHash(login.Password, user.PasswordHash) {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
-		return
-	}
-
-	id, err := uuid.NewRandom()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal error"})
-		return
-	}
-	now := time.Now()
-	claims := jwt.MapClaims{
-		"id":      id,
-		"user_id": user.ID,
-		"email":   user.Email,
-		"iat":     now.Unix(),
-		"exp":     now.Add(h.tokenExpiration).Unix(),
-	}
-
-	//add sign method
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	//sign with private key
-	tokenString, err := token.SignedString(h.jwtSecret)
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Token generation failed"})
+		if errors.Is(err, utils.ERROR_INVALID_CREDENTIALS) {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"errors": err.Error(),
+			})
+			return
+		}
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+			"errors": err.Error(),
+		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"token":      tokenString,
-		"expires_in": h.tokenExpiration.Seconds(),
-		//access token type
 		"token_type": "Bearer",
 	})
 }
 
 func (h *AuthHandler) RefreshToken(c *gin.Context) {
 	//check context value. comes from the middleware
-	userID, exists := c.Get("user_id")
-	if !exists {
+	userID, exists_id := c.Get("user_id")
+	email, exists_email := c.Get("email")
+	if !exists_id || !exists_email {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
 		return
 	}
 
-	//TODO: code duplication. move to a func
-	//new token
-	now := time.Now()
-	claims := jwt.MapClaims{
-		"user_id": userID,
-		"iat":     now.Unix(),
-		"exp":     now.Add(h.tokenExpiration).Unix(),
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, err := token.SignedString(h.jwtSecret)
+	tokenString, err := h.service.RefreshToken(userID.(int), email.(string))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Token refresh failed"})
 		return
@@ -194,7 +98,6 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"token":      tokenString,
-		"expires_in": h.tokenExpiration.Seconds(),
 		"token_type": "Bearer",
 	})
 }
@@ -224,62 +127,21 @@ func (h *AuthHandler) LogoutHandler(c *gin.Context) {
 	}
 
 	tokenString := parts[1]
-	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		//check signing method
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, jwt.ErrSignatureInvalid
-		}
-		return h.jwtSecret, nil
-	})
 
+	err := h.service.LogoutUser(tokenString)
 	if err != nil {
-		if errors.Is(err, jwt.ErrSignatureInvalid) {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid token signature"})
-		} else {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
+
+		if errors.Is(err, utils.ERROR_FAILED_TO_LOGOUT) {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
 		}
-		return
-	}
 
-	//extract and validate claims
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok || !token.Valid {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid token claims"})
-		return
-	}
+		if errors.Is(err, utils.ERROR_TOKEN_EXPIRED) || errors.Is(err, utils.ERROR_NO_JTI) {
+			c.JSON(http.StatusOK, gin.H{"message": err.Error()})
+			return
+		}
 
-	//check token expiration
-	exp, ok := claims["exp"].(float64)
-	if !ok {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid token claims"})
-		return
-	}
-
-	jti, ok := claims["id"].(string)
-	if !ok {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid token claims"})
-		return
-	}
-
-	if jti == "" {
-		c.JSON(http.StatusOK, gin.H{"message": "Logged out (no JTI)"})
-		return
-	}
-
-	// Calculate the remaining time until the token expires
-	expiresAt := time.Unix(int64(exp), 0)
-	now := time.Now()
-	ttl := expiresAt.Sub(now)
-	if ttl <= 0 {
-		c.JSON(http.StatusOK, gin.H{"message": "Logged out (token already expired)"})
-		return
-	}
-
-	// Add the token to the blacklist (Redis) with its remaining TTL
-	err = h.cacheDB.DB.Set(jti, "revoked", ttl).Err()
-	if err != nil {
-		log.Printf("Failed to add token to blacklist: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to log out"})
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 		return
 	}
 

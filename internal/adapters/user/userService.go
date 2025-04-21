@@ -67,32 +67,7 @@ func (s *UserService) LoginUser(input models.UserLoginRequest) (string, error) {
 		return "", errors.New("Invalid credentials")
 	}
 
-	id, err := uuid.NewRandom()
-	if err != nil {
-		log.Println(err)
-		return "", errors.New("Internal error")
-	}
-
-	now := time.Now()
-	claims := jwt.MapClaims{
-		"id":      id,
-		"user_id": user.ID,
-		"email":   user.Email,
-		"iat":     now.Unix(),
-		"exp":     now.Add(s.tokenExpiration).Unix(),
-	}
-
-	//add sign method
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	//sign with private key
-	tokenString, err := token.SignedString(s.jwtSecret)
-
-	if err != nil {
-		log.Print(err)
-		return "", errors.New("Token generation failed")
-	}
-
-	return tokenString, nil
+	return s.createToken(user.ID, user.Email)
 }
 
 func (s *UserService) LogoutUser(tokenString string) error {
@@ -163,6 +138,39 @@ func (s *UserService) ValidateUsersToken(tokenString string) error {
 	}
 	return nil
 
+}
+
+func (s *UserService) RefreshToken(userID int, email string) (string, error) {
+	return s.createToken(userID, email)
+}
+
+func (s *UserService) createToken(userID int, email string) (string, error) {
+	id, err := uuid.NewRandom()
+	if err != nil {
+		log.Println(err)
+		return "", errors.New("Internal error")
+	}
+
+	now := time.Now()
+	claims := jwt.MapClaims{
+		"id":      id,
+		"user_id": userID,
+		"email":   email,
+		"iat":     now.Unix(),
+		"exp":     now.Add(s.tokenExpiration).Unix(),
+	}
+
+	//add sign method
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	//sign with private key
+	tokenString, err := token.SignedString(s.jwtSecret)
+
+	if err != nil {
+		log.Print(err)
+		return "", errors.New("Token generation failed")
+	}
+
+	return tokenString, nil
 }
 
 func (s *UserService) getClaimsFromToken(tokenString string) (jwt.MapClaims, error) {

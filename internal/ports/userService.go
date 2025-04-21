@@ -7,4 +7,5 @@ type UserServicePort interface {
 	LoginUser(models.UserLoginRequest) (string, error)
 	LogoutUser(tokenString string) error
 	ValidateUsersToken(tokenString string) error
+	RefreshToken(userID int, email string) (string, error)
 }
