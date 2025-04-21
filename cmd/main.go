@@ -24,7 +24,6 @@ func main() {
 	defer db.DB.Close()
 
 	r := gin.New()
-	r.Use(gin.Recovery())
 	r.Use(gin.Logger())
 
 	r.Use(func(c *gin.Context) {
