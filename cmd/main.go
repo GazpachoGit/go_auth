@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"go_auth/internal/config"
 	"go_auth/internal/database"
 	"go_auth/internal/handlers"
@@ -21,7 +22,7 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to connect to database:", err)
 	}
-	defer db.DB.Close()
+	defer db.DB.Close(context.Background())
 
 	r := gin.New()
 	r.Use(gin.Logger())

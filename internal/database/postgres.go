@@ -1,29 +1,26 @@
 package database
 
 import (
-	"database/sql"
-	"time"
+	"context"
+	"log"
 
-	_ "github.com/lib/pq"
+	"github.com/jackc/pgx/v5"
 )
 
 type Database struct {
-	DB *sql.DB
+	DB *pgx.Conn
 }
 
 func NewDatabase(connStr string) (*Database, error) {
-	db, err := sql.Open("postgres", connStr)
 
+	connConfig, err := pgx.ParseConfig(connStr)
 	if err != nil {
+		log.Fatalf("Failed to parse config: %v", err)
 		return nil, err
 	}
 
-	//move to config(?)
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(5 * time.Minute)
-
-	if err := db.Ping(); err != nil {
+	db, err := pgx.Connect(context.Background(), connConfig.ConnString())
+	if err != nil {
 		return nil, err
 	}
 

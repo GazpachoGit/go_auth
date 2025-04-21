@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"go_auth/internal/database"
@@ -51,7 +52,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 
 	//TODO: hexagon arch. move this to datasource level
 	var exists bool
-	err := h.db.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM USERS WHERE email = $1)", user.Email).Scan(&exists)
+	err := h.db.DB.QueryRow(context.Background(), "SELECT EXISTS(SELECT 1 FROM USERS WHERE email = $1)", user.Email).Scan(&exists)
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
@@ -68,14 +69,14 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	tx, err := h.db.DB.Begin()
+	tx, err := h.db.DB.Begin(context.Background())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Transaction start failed"})
 		return
 	}
 
 	var id int
-	err = tx.QueryRow(`
+	err = tx.QueryRow(context.Background(), `
 	INSERT INTO users (email, password_hash) VALUES ($1, $2)
 	RETURNING id`,
 		user.Email,
@@ -83,12 +84,12 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	).Scan(&id)
 
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(context.Background())
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "User creation failed"})
 		return
 	}
 
-	if err = tx.Commit(); err != nil {
+	if err = tx.Commit(context.Background()); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Transaction commit failed"})
 		return
 	}
@@ -110,7 +111,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 	var user models.User
 
-	err := h.db.DB.QueryRow(`SELECT id, email, password_hash FROM users
+	err := h.db.DB.QueryRow(context.Background(), `SELECT id, email, password_hash FROM users
 	WHERE email = $1`,
 		login.Email,
 	).Scan(&user.ID, &user.Email, &user.PasswordHash)

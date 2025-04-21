@@ -1,57 +1,45 @@
-version: '3.8'
-
 services:
   postgres:
-    container_name: postgres_container
-    image: postgres:17.4-alpine3.21
+    image: postgres:16
+    restart: always
     environment:
-      POSTGRES_DB: 'auth_service'
-      POSTGRES_USER: 'postgres'
-      POSTGRES_PASSWORD: 'postgres'
-      PGDATA: '/var/lib/postgresql/data/pgdata'
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=mydb
+    ports:
+      - '6432:5432' # Host:Container
     volumes:
       - ./init_db:/docker-entrypoint-initdb.d
-      - postgres_data:/var/lib/postgresql/data/pgdata
-    ports:
-      - '6432:5432'
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U puser -d notifyDB']
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d mydb']
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s
-    restart: unless-stopped
     deploy:
       resources:
         limits:
           cpus: '1'
           memory: 4G
-    networks:
-      - postgres
 
   pgadmin:
-    container_name: pgadmin_container
-    image: dpage/pgadmin9.2.0
+    #under the hood it will create a DNS name(postgres) for the postgres container. Cause  pgadmin is also running inside a container (and docker compose creates a networks), you must use 'postgres' as a hostname (not localhost) when you add a server connection in pgadmin
+
+    #From a client on your host machine: host: localhost, port: 5432
+    #From a Docker container on the same Docker network: host: postgres, port: 5432
+    image: dpage/pgadmin4:8.3
+    restart: always
     environment:
-      PGADMIN_DEFAULT_EMAIL: 'puser@mail.com'
-      PGADMIN_DEFAULT_PASSWORD: 'postgres'
-      PGADMIN_CONFIG_SERVER_MODE: 'False' # To allow running in desktop mode
+      - PGADMIN_DEFAULT_EMAIL=admin@mail.com
+      - PGADMIN_DEFAULT_PASSWORD=admin
+    ports:
+      - '8080:80'
+    depends_on:
+      postgres:
+        condition: service_healthy # pgAdmin starts *after* Postgres is healthy
     volumes:
       - pgadmin_data:/var/lib/pgadmin
-    ports:
-      - '5050:80'
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 1G
-    networks:
-      - postgres
-
-networks:
-  postgres:
-    driver: bridge
 
 volumes:
   postgres_data:
