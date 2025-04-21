@@ -7,22 +7,27 @@ import (
 	"go_auth/internal/database"
 	"go_auth/internal/models"
 	"go_auth/internal/utils"
+	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 type AuthHandler struct {
 	db              *database.Database
+	cacheDB         *database.CacheDB
 	jwtSecret       []byte
 	tokenExpiration time.Duration
 }
 
-func NewAuthHandler(db *database.Database, jwtSecret []byte, tokenExpiration time.Duration) *AuthHandler {
+func NewAuthHandler(db *database.Database, cache *database.CacheDB, jwtSecret []byte, tokenExpiration time.Duration) *AuthHandler {
 	return &AuthHandler{
 		db:              db,
+		cacheDB:         cache,
 		jwtSecret:       jwtSecret,
 		tokenExpiration: tokenExpiration,
 	}
@@ -131,8 +136,14 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
+	id, err := uuid.NewRandom()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal error"})
+		return
+	}
 	now := time.Now()
 	claims := jwt.MapClaims{
+		"id":      id,
 		"user_id": user.ID,
 		"email":   user.Email,
 		"iat":     now.Unix(),
@@ -198,7 +209,79 @@ func (h *AuthHandler) GetUserProfile(c *gin.Context) {
 	})
 }
 
-//TODO: logout logic
-//Blacklisting in server side
-//add ID (JTI) to the token claims
-//redis for storage?
+func (h *AuthHandler) LogoutHandler(c *gin.Context) {
+	//TODO: code duplication. to untils
+	authHeader := c.GetHeader("Authorization")
+	if authHeader == "" {
+		c.JSON(http.StatusOK, gin.H{"message": "Already logged out (no token provided)"})
+		return
+	}
+
+	parts := strings.Split(authHeader, " ")
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid authorization format"})
+		return
+	}
+
+	tokenString := parts[1]
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		//check signing method
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, jwt.ErrSignatureInvalid
+		}
+		return h.jwtSecret, nil
+	})
+
+	if err != nil {
+		if errors.Is(err, jwt.ErrSignatureInvalid) {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid token signature"})
+		} else {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
+		}
+		return
+	}
+
+	//extract and validate claims
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok || !token.Valid {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid token claims"})
+		return
+	}
+
+	//check token expiration
+	exp, ok := claims["exp"].(float64)
+	if !ok {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid token claims"})
+		return
+	}
+
+	jti, ok := claims["id"].(string)
+	if !ok {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid token claims"})
+		return
+	}
+
+	if jti == "" {
+		c.JSON(http.StatusOK, gin.H{"message": "Logged out (no JTI)"})
+		return
+	}
+
+	// Calculate the remaining time until the token expires
+	expiresAt := time.Unix(int64(exp), 0)
+	now := time.Now()
+	ttl := expiresAt.Sub(now)
+	if ttl <= 0 {
+		c.JSON(http.StatusOK, gin.H{"message": "Logged out (token already expired)"})
+		return
+	}
+
+	// Add the token to the blacklist (Redis) with its remaining TTL
+	err = h.cacheDB.DB.Set(jti, "revoked", ttl).Err()
+	if err != nil {
+		log.Printf("Failed to add token to blacklist: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to log out"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Logged out successfully"})
+}

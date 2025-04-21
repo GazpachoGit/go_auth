@@ -25,6 +25,11 @@ type Config struct {
 		DBName   string
 	}
 
+	Redis struct {
+		Host string
+		Port string
+	}
+
 	JWT struct {
 		Secret        string
 		TokenExpiry   time.Duration
@@ -54,6 +59,9 @@ func Load() (*Config, error) {
 	cfg.Database.Password = getEnv("DB_PASSWORD", "postgres")
 	cfg.Database.DBName = getEnv("DB_NAME", "mydb")
 
+	cfg.Redis.Host = getEnv("REDIS_HOST", "localhost")
+	cfg.Redis.Port = getEnv("REDIS_PORT", "6379")
+
 	cfg.JWT.Secret = getEnv("JWT_SECRET", "my_secret")
 	cfg.JWT.TokenExpiry = time.Hour * 24    // 24 hours
 	cfg.JWT.RefreshExpiry = time.Hour * 168 // 7 days
@@ -79,5 +87,4 @@ func (c *Config) GetDBConnStr() string {
 		c.Database.Port,
 		c.Database.DBName,
 	)
-	//return "postgres://postgres:postgres@localhost:6432/mydb?sslmode=disable"
 }

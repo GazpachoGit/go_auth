@@ -24,6 +24,8 @@ func main() {
 	}
 	defer db.DB.Close(context.Background())
 
+	cacheDB := database.NewCacheDB(cfg.Redis.Host, cfg.Redis.Port)
+
 	r := gin.New()
 	r.Use(gin.Logger())
 
@@ -39,7 +41,7 @@ func main() {
 		c.Next()
 	})
 
-	authHandler := handlers.NewAuthHandler(db, []byte(cfg.JWT.Secret), cfg.JWT.TokenExpiry)
+	authHandler := handlers.NewAuthHandler(db, cacheDB, []byte(cfg.JWT.Secret), cfg.JWT.TokenExpiry)
 
 	public := r.Group("/api/v1")
 	{
@@ -48,10 +50,11 @@ func main() {
 	}
 
 	protected := r.Group("/api/v1")
-	protected.Use(middlewares.AuthMiddleware([]byte(cfg.JWT.Secret)))
+	protected.Use(middlewares.AuthMiddleware([]byte(cfg.JWT.Secret), cacheDB))
 	{
 		protected.POST("/refresh-token", authHandler.RefreshToken)
 		protected.GET("/profile", authHandler.GetUserProfile)
+		protected.POST("/logout", authHandler.LogoutHandler)
 	}
 
 	serverAddr := cfg.Server.Host + ":" + cfg.Server.Port
