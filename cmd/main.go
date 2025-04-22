@@ -1,9 +1,9 @@
 package main
 
 import (
-	"context"
+	"go_auth/internal/adapters/db"
+	"go_auth/internal/adapters/user"
 	"go_auth/internal/config"
-	"go_auth/internal/database"
 	"go_auth/internal/handlers"
 	"go_auth/internal/middlewares"
 	"log"
@@ -18,13 +18,16 @@ func main() {
 		log.Fatal("Failed to load config:", err)
 	}
 
-	db, err := database.NewDatabase(cfg.GetDBConnStr())
+	storage, err := db.NewUserStorage(cfg.GetDBConnStr(), cfg.Redis.Host, cfg.Redis.Port)
+
 	if err != nil {
 		log.Fatal("Failed to connect to database:", err)
 	}
-	defer db.DB.Close(context.Background())
+	defer storage.Close()
 
-	cacheDB := database.NewCacheDB(cfg.Redis.Host, cfg.Redis.Port)
+	userService := user.NewUserService(storage, []byte(cfg.JWT.Secret), cfg.JWT.TokenExpiry)
+
+	authHandler := handlers.NewAuthHandler(userService)
 
 	r := gin.New()
 	r.Use(gin.Logger())
@@ -41,8 +44,6 @@ func main() {
 		c.Next()
 	})
 
-	authHandler := handlers.NewAuthHandler(db, cacheDB, []byte(cfg.JWT.Secret), cfg.JWT.TokenExpiry)
-
 	public := r.Group("/api/v1")
 	{
 		public.POST("/register", authHandler.Register)
@@ -50,7 +51,7 @@ func main() {
 	}
 
 	protected := r.Group("/api/v1")
-	protected.Use(middlewares.AuthMiddleware([]byte(cfg.JWT.Secret), cacheDB))
+	protected.Use(middlewares.AuthMiddleware(userService))
 	{
 		protected.POST("/refresh-token", authHandler.RefreshToken)
 		protected.GET("/profile", authHandler.GetUserProfile)

@@ -72,7 +72,7 @@ func (s *UserService) LoginUser(input models.UserLoginRequest) (string, error) {
 
 func (s *UserService) LogoutUser(tokenString string) error {
 
-	claims, err := s.getClaimsFromToken(tokenString)
+	claims, err := s.GetClaimsFromToken(tokenString)
 	if err != nil {
 		return err
 	}
@@ -108,11 +108,7 @@ func (s *UserService) LogoutUser(tokenString string) error {
 	return nil
 }
 
-func (s *UserService) ValidateUsersToken(tokenString string) error {
-	claims, err := s.getClaimsFromToken(tokenString)
-	if err != nil {
-		return err
-	}
+func (s *UserService) ValidateUsersToken(claims jwt.MapClaims) error {
 	//check token expiration
 	exp, ok := claims["exp"].(float64)
 	if !ok {
@@ -173,7 +169,7 @@ func (s *UserService) createToken(userID int, email string) (string, error) {
 	return tokenString, nil
 }
 
-func (s *UserService) getClaimsFromToken(tokenString string) (jwt.MapClaims, error) {
+func (s *UserService) GetClaimsFromToken(tokenString string) (jwt.MapClaims, error) {
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		//check signing method
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {

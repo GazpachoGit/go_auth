@@ -47,6 +47,10 @@ func NewUserStorage(connStr string, cacheHost, cachePort string) (ports.UserStor
 	}, nil
 }
 
+func (s *UserStorage) Close() {
+	s.db.Close(context.Background())
+}
+
 func (s *UserStorage) CheckUserExists(email string) (bool, error) {
 	var exists bool
 	err := s.db.QueryRow(context.Background(), "SELECT EXISTS(SELECT 1 FROM USERS WHERE email = $1)", email).Scan(&exists)
@@ -122,7 +126,7 @@ func (s *UserStorage) CheckJTWBlocked(jti string) (bool, error) {
 		return true, nil
 	} else if !errors.Is(err, redis.Nil) {
 		log.Printf("Error checking blacklist: %v", err)
-		return false, errors.New("Internal error")
+		return false, nil
 	}
 	return false, nil
 }

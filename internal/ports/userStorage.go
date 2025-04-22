@@ -11,4 +11,5 @@ type UserStoragePort interface {
 	GetUser(email string) (*models.User, error)
 	CheckJTWBlocked(jti string) (bool, error)
 	AddJWTToBlacklist(jti string, ttl time.Duration) error
+	Close()
 }
